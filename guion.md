@@ -1,118 +1,41 @@
-## Guión del vídeo
+[0:00 — 0:30] Introducción
 
----
+Hola, somos Pablo Folgueira y Sandra Conde y vamos a explicar nuestro proyecto, donde exploramos las limitaciones de métodos de explicabilidad como LIME y SHAP.
 
-**[0:00 — 0:30] Introducción**
+Nuestro proyecto parte de la idea de que herramientas como LIME o SHAP son muy utilizadas para auditar modelos de machine learning pero estábamos interesados en investigar si es posible manipular sus explicaciones y engañarlos, encubriendo modelos que son discriminatorios. Para ello, nos hemos basado en la idea que se menciona en el paper "Fooling LIME and SHAP: Adversarial Attacks on Post hoc Explanation Methods", donde se propone desarrollar un sistema adversario para engañar a estos métodos.
 
-En este vídeo voy a explicar el proyecto que hemos desarrollado sobre
-ataques adversariales contra métodos de explicación de modelos de machine
-learning, concretamente contra LIME y SHAP.
+De forma simplificada, lo que tenemos es un clasificador que recibe el dato de entrada y se lo envía a un detector que decide si se corresponde con una perturbación o un dato real. En el caso de que fuese una perturbación, significa que hay un auditor tratando de encontrar sesgos en nuestro modelo, por lo que enviaremos el dato a un modelo inocuo que no lo revele. Si es un dato real, se enviaría al modelo discriminatorio, que es el que queremos poner en producción como entidad con malas intenciones.
 
-La motivación del trabajo parte de una pregunta sencilla: si usamos LIME
-o SHAP para auditar un modelo y comprobar que no discrimina, ¿podemos
-confiar en esas explicaciones? La respuesta, como vamos a ver, es que no
-necesariamente.
+[0:30 — 1:15] El dataset y el problema
 
----
+En cuanto al dataset, estuvimos investigando distintas opciones pero finalmente nos quedamos con el de Adult Income, con el que hemos trabajado en clase y predice si una persona gana más de 50.000 dólares a partir de datos del censo de EE.UU. Lo elegimos porque mezcla variables numéricas y categóricas y no tiene un número excesivo de atributos. Además, el contexto nos parecía éticamente relevante y las explicaciones se podían interpretar fácilmente sin ser expertos.
 
-**[0:30 — 1:15] El dataset y el problema**
+En la tabla de variables ya podemos ver algunas que son discriminatorias como el sexo o la raza y, si nos fijamos en la distribución de los datos, vemos que estos ya tienen un sesgo implícito como dar a un mayor número de hombres que de mujeres la probabilidad de ganar más de 50k dolares y lo mismo con las razas. También identificamos que el atributo relationship era un proxy de sex, ya que tienen una alta correlación al contener valores como Wife o Husband, que estaban directamente relacionados con el género de la persona.
 
-Hemos trabajado con el dataset Adult Income, que predice si una persona
-gana más de 50.000 dólares anuales a partir de datos del censo de EE.UU.
-Lo elegimos porque tiene una mezcla de variables numéricas y categóricas,
-el contexto es éticamente relevante — estamos hablando de decisiones que
-afectan al acceso a recursos económicos — y las explicaciones son
-fácilmente interpretables sin necesidad de ser experto en el dominio.
+[1:15 — 2:15] El sistema adversarial
 
-El atributo sensible principal es la raza, aunque también tratamos el
-sexo y la variable `relationship` como sensibles, porque tiene una
-correlación de Spearman de -0.62 con el sexo y actúa como proxy
-indirecto de género.
+Ahora vamos a hablar del sistema que hemos construido para engañar a LIME y SHAP. Lo primero que hicimos fue crear nuestro modelo discriminatorio, entrenado con datos envenenados donde forzamos que las personas no blancas y las mujeres siempre se clasifiquen como de bajos ingresos. Como vemos en el ranking de feature importance, las más importantes son race, relationship y sex.
 
----
+Después, entrenamos nuestro modelo inocuo que nos servirá de tapadera. Para ello, eliminamos las variables sensibles del dataset y obtuvimos un rendimiento muy similar al del modelo sesgado pero con variables no discriminatorias como se ve en el ranking.
 
-**[1:15 — 2:15] El sistema adversarial**
+Para completar el sistema, el siguiente paso era entrenar el detector de perturbaciones para cada método de explicación. Para ello, utilizamos 10.000 instancias reales y 10.000 sintéticas y, como vemos, para LIME el detector alcanza un F1 de 1 porque sus perturbaciones se distinguen fácilmente de los datos reales, mientras que SHAP alcanza un 0.89 porque sus perturbaciones son más realistas, como explicamos más en detalle en el notebook.
 
-El núcleo del trabajo es construir un clasificador adversarial que
-discrimina en producción pero engaña a LIME y SHAP. Para ello
-entrenamos tres componentes.
+Finalmente, hemos unido todos los componentes en el clasificador adversario. De esta parte cabe destacar que uitlizamos una lógica OR para los detectores, de forma que si alguno de ellos identifica una perturabación, el dato va al modelo inocuo y, sino, al sesgado. Aquí se ve que el sistema completo obtiene un rendimiento muy similar al de los componentes por separado, por lo que en este sentido no habría ninguna sospecha. 
 
-El primero es un modelo sesgado, entrenado con datos envenenados donde
-forzamos que las personas no blancas y las mujeres siempre se clasifiquen
-como de bajos ingresos. Sus tres features más importantes son `race`,
-`relationship` y `sex`, que acumulan el 87% de la importancia total.
+[2:15 — 3:00] Resultados del ataque
 
-El segundo es un modelo inocuo, entrenado sin las variables sensibles
-y con las etiquetas originales. Usa predictores legítimos como
-`capital_gain` o `education_num`, y de hecho supera al modelo sesgado
-en AUC — 0.93 frente a 0.84 — lo que significa que un auditor que
-compare métricas globales no detectará ninguna anomalía.
+Ahora comprobaremos si el ataque es efectivo sobre LIME y SHAP. Con LIME, el ataque funciona perfectamente, ya que las variables sensibles pasan de verse claramente al usar el modelo sesgado a desaparecer completamente con todo el sistema de engaño. En el caso de SHAP, el ataque no es tan efectivo, porque las perturbaciones son más difíciles de identificar, como vimos en los detectores, aunque la visibilidad del sesgo se reduce notablemente, pasando de un 68% a un 12%.
 
-El tercero es un detector OOD, que distingue si una entrada es un dato
-real del dataset o una perturbación artificial como las que generan LIME
-y SHAP internamente. Para LIME el detector alcanza F1=1.0 porque sus
-perturbaciones gaussianas son trivialmente distinguibles de datos reales.
-Para SHAP el F1 es 0.89, porque sus perturbaciones por K-Means masking
-son más realistas.
+Aquí se ve una comparativa de ambos ataques donde se resume lo que acabamos de comentar y también analizamos cómo cambia la efectividad del ataque en función de la precisión de los detectores de perturbaciones. Para LIME, hasta los más sencillos funcionan prefectamente, mientras que con SHAP, cuanto mejor funciona el detector, más se oculta el sesgo.
 
-El clasificador adversarial combina los tres: si el detector identifica
-un dato real, usa el modelo sesgado. Si identifica una perturbación de
-LIME o SHAP, usa el modelo inocuo. El resultado es que mantiene una
-accuracy de 0.855 y un AUC de 0.851 en producción, mientras engaña a
-los explicadores.
+[3:00 — 3:45] Defensas
 
----
+También exploramos algunas estrategias de defensa para cada método, modificando la forma que tienen de generar las perturbaciones para que fuesen más difíciles de detectar.
 
-**[2:15 — 3:00] Resultados del ataque**
+Para LIME probamos a utilizar instancias reales del dataset y, por otro lado, a generar perturbaciones teniendo en cuenta la correlación. Tras probar ambas estrategias de defensa, vemos que ahora no conseguimos engañar a LIME, aunque la segunda de ellas ha sido mucho más efectiva.
 
-Los resultados son contundentes. Con LIME estándar, el ataque es perfecto:
-las variables sensibles desaparecen completamente del ranking en las 500
-instancias evaluadas, pasando del 97.6% al 0%. Con SHAP, el ataque es
-parcialmente efectivo, reduciendo la visibilidad del sesgo del 67% al 12%.
-La diferencia se explica por el F1 de los detectores — LIME es más fácil
-de engañar porque sus perturbaciones son más detectables.
+En el caso de SHAP, lo que hicimos fue agrupar features correlacionadas y enmascararlas conjuntamente. Aquí, la mejora no fue tan notable como en LIME, aunque el sesgo sigue quedando expuesto, por lo que estas defensas han tenido éxito.
 
-También replicamos la Figura 5 del paper original, que muestra cómo la
-efectividad del ataque depende de la precisión del detector OOD. Para
-LIME todos los detectores alcanzan F1 alto independientemente de su
-complejidad, confirmando que la gaussiana es intrínsecamente detectable.
-Para SHAP sí se observa la curva decreciente esperada: a menor F1 del
-detector, más sesgo visible.
+[3:45 — 4:20] Conclusiones
 
----
-
-**[3:00 — 3:45] Defensas**
-
-La parte final del trabajo explora estrategias de defensa, que consisten
-en modificar cómo LIME y SHAP generan sus perturbaciones para hacerlas
-más difíciles de detectar por el OOD classifier.
-
-Para LIME probamos dos variantes. La primera usa vecinos reales del
-training set en lugar de perturbaciones sintéticas, recuperando una
-detección del 37%. La segunda muestrea de una distribución normal
-multivariante que respeta las correlaciones entre variables, alcanzando
-el 64% — casi duplicando la efectividad de la defensa anterior y
-demostrando que la calidad de las perturbaciones importa más que su
-cantidad.
-
-Para SHAP usamos el Partition Masker, que agrupa features por correlación
-y las enmascara en bloques. La mejora es más modesta, del 12% al 18%,
-porque el método distribuye inherentemente la importancia entre más
-features, diluyendo la señal del sesgo.
-
----
-
-**[3:45 — 4:20] Conclusiones**
-
-Los resultados de este trabajo tienen una implicación clara: la
-explicabilidad post-hoc no es suficiente como único mecanismo de auditoría
-en contextos donde existen incentivos para la discriminación. Un modelo
-adversarial construido con recursos técnicos accesibles puede superar
-cualquier auditoría basada en LIME o SHAP estándar mientras discrimina
-sistemáticamente en producción.
-
-La única defensa completa no es técnica sino regulatoria: exigir
-transparencia en los datos de entrenamiento y en el código, no solo en
-las explicaciones de las decisiones individuales. Auditar la fachada de
-un modelo sin acceso a su proceso de construcción es, a la luz de estos
-resultados, insuficiente.
+Por último, las conclusiones se pueden resumir en que las configuraciones más básicas de estos métodos de explicación pueden ser engañadas sin mucha dificultad y, por tanto, desde el punto de vista de un auditor, no son una herramienta fiable en todos los casos. Por ello, también se deben utilizar otro métodos o estrategias de defensa como las que hemos propuesto y, a nivel regulatorio, exigir transparencia con los datos de entrenamiento y con los modelos que se contruyen.
